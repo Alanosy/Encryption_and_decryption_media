@@ -1,8 +1,9 @@
-import concurrent
+
 import os
 import struct
-from tqdm import tqdm
+import concurrent
 from PIL import Image
+from tqdm import tqdm
 from Crypto.Cipher import AES
 from cryptography.fernet import Fernet
 from Crypto.Random import get_random_bytes
