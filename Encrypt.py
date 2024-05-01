@@ -1,9 +1,12 @@
+import concurrent
 import os
 import struct
+from tqdm import tqdm
 from PIL import Image
 from Crypto.Cipher import AES
 from cryptography.fernet import Fernet
 from Crypto.Random import get_random_bytes
+from concurrent.futures import ThreadPoolExecutor
 
 class Encrypt():
 
@@ -36,33 +39,46 @@ class Encrypt():
         else:
             print("未选择处理方式")
 
-    def batch_process(self, mode, input_folder, output_folder, video_key=None,image_key=None):
-        """批量处理文件夹"""
+    def batch_process(self, mode, input_folder, output_folder, video_key=None, image_key=None):
+        """预处理"""
+        total_files = sum([len(files) for _, _, files in os.walk(input_folder)])
+        processed_files = 0
+
         if not os.path.exists(output_folder):
             os.makedirs(output_folder)
-        for root, _, files in os.walk(input_folder):
-            for filename in files:
-                full_input_path = os.path.join(root, filename)
-                base_name, ext = os.path.splitext(filename)
-                # 统一转换扩展名为小写进行比较
-                ext_lower = ext.lower()
-                # 图片处理
-                if ext_lower in ['.jpg', '.jpeg', '.png']:
-                    if mode == 'encrypt':
-                        self.encrypt_image(full_input_path, output_folder,image_key)
-                    elif mode == 'decrypt':
-                        self.decrypt_image(full_input_path, output_folder,image_key)
+
+        with ThreadPoolExecutor() as executor:
+            futures = []
+            for root, _, files in os.walk(input_folder):
+                for filename in files:
+                    full_input_path = os.path.join(root, filename)
+                    base_name, ext = os.path.splitext(filename)
+                    ext_lower = ext.lower()
+
+                    if ext_lower in ['.jpg', '.jpeg', '.png']:
+                        if mode == 'encrypt':
+                            future = executor.submit(self.encrypt_image, full_input_path, output_folder, image_key)
+                        elif mode == 'decrypt':
+                            future = executor.submit(self.decrypt_image, full_input_path, output_folder, image_key)
+                    elif ext_lower in ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.mpg', '.mpeg', '.3gp',
+                                       '.webm']:
+                        output_file_path = os.path.join(output_folder, f"{base_name}_{mode}{ext}")
+                        if mode == 'encrypt':
+                            future = executor.submit(self.encrypt_video, full_input_path, output_file_path, video_key)
+                        elif mode == 'decrypt':
+                            future = executor.submit(self.decrypt_video, full_input_path, output_file_path, video_key)
                     else:
-                        print(f"Ignoring unsupported operation '{mode}' for images.")
-                # 视频处理
-                elif ext_lower in ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.mpg', '.mpeg', '.3gp', '.webm']:
-                    output_file_path = os.path.join(output_folder, f"{base_name}_{mode}{ext}")
-                    if mode == 'encrypt':
-                        self.encrypt_video(full_input_path, output_file_path, video_key)
-                    elif mode == 'decrypt':
-                        self.decrypt_video(full_input_path, output_file_path, video_key)
-                    else:
-                        print(f"Ignoring unsupported operation '{mode}' for videos.")
+                        print(f"Ignoring unsupported file type for operation '{mode}': {filename}")
+
+                    if future is not None:
+                        futures.append(future)
+
+            for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures),
+                               desc=f"{mode.capitalize()}ing files", unit="file"):
+                processed_files += 1
+                tqdm.write(f"\rTotal: {total_files}, Processed: {processed_files}", end='')
+
+        tqdm.write(f"\nFinished processing {processed_files} out of {total_files} files.")
 
     def encrypt_video(self, input_file, output_file, video_key):
         """加密视频"""
