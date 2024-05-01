@@ -1,16 +1,15 @@
-
 import os
 import struct
 import concurrent
 from PIL import Image
 from tqdm import tqdm
+from io import BytesIO
 from Crypto.Cipher import AES
 from cryptography.fernet import Fernet
 from Crypto.Random import get_random_bytes
 from concurrent.futures import ThreadPoolExecutor
 
 class Encrypt():
-
     def __init__(self,model,input_folder,output_folder_encrypt,output_folder_decrypt,video_key = None,image_key=None):
         """初始化方法"""
         if video_key==None and image_key==None:
@@ -20,6 +19,7 @@ class Encrypt():
                     self.file_has_content(image_file_name) and self.file_has_content(video_file_name):
                 video_key = self.read_file_to_key('video','video_key.txt')
                 image_key = self.read_file_to_key('image','image_key.txt')
+        
             else:
                 video_key = self.generate_video_key()
                 image_key = self.generate_image_key()
@@ -32,11 +32,10 @@ class Encrypt():
             # 保存密钥到文件
             self.save_key_to_file(video_key.hex(), 'video_key.txt')
             self.save_key_to_file(str(image_key, 'utf-8'), 'image_key.txt')  # 注意转换Fernet密钥为字符串
-        # 源文件夹
         if model == 'encrypt':
             self.batch_process(model, input_folder, output_folder_encrypt, video_key,image_key)
         elif model == 'decrypt':
-            self.batch_process(model, input_folder, output_folder_decrypt, video_key, image_key)
+            self.batch_process(model, output_folder_encrypt, output_folder_decrypt, video_key, image_key)
         else:
             print("未选择处理方式")
 
@@ -55,30 +54,35 @@ class Encrypt():
                     full_input_path = os.path.join(root, filename)
                     base_name, ext = os.path.splitext(filename)
                     ext_lower = ext.lower()
-
-                    if ext_lower in ['.jpg', '.jpeg', '.png']:
-                        if mode == 'encrypt':
+                    if mode == 'encrypt':
+                        if ext_lower in ['.jpg', '.jpeg', '.png']:
                             future = executor.submit(self.encrypt_image, full_input_path, output_folder, image_key)
-                        elif mode == 'decrypt':
+                        elif ext_lower in ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.mpg', '.mpeg', '.3gp',
+                                           '.webm']:
+                            output_file_path = os.path.join(output_folder, f"{base_name}_{mode}{ext}")
+                            if mode == 'encrypt':
+                                future = executor.submit(self.encrypt_video, full_input_path, output_file_path, video_key)
+                            else:
+                                print(f"Ignoring unsupported file type for operation '{mode}': {filename}")
+                    elif mode == 'decrypt':
+                        if ext_lower in ['.jpg', '.jpeg', '.png', '.bin']:
                             future = executor.submit(self.decrypt_image, full_input_path, output_folder, image_key)
-                    elif ext_lower in ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.mpg', '.mpeg', '.3gp',
-                                       '.webm']:
-                        output_file_path = os.path.join(output_folder, f"{base_name}_{mode}{ext}")
-                        if mode == 'encrypt':
-                            future = executor.submit(self.encrypt_video, full_input_path, output_file_path, video_key)
-                        elif mode == 'decrypt':
-                            future = executor.submit(self.decrypt_video, full_input_path, output_file_path, video_key)
-                    else:
-                        print(f"Ignoring unsupported file type for operation '{mode}': {filename}")
+                        elif ext_lower in ['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.mpg', '.mpeg', '.3gp',
+                                           '.webm']:
+                            output_file_path = os.path.join(output_folder, f"{base_name}_{mode}{ext}")
+                            future = executor.submit(self.decrypt_video, full_input_path, output_file_path,
+                                                         video_key)
+                        else:
+                            print(f"Ignoring unsupported file type for operation '{mode}': {filename}")
 
                     if future is not None:
                         futures.append(future)
-
+        
             for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures),
                                desc=f"{mode.capitalize()}ing files", unit="file"):
                 processed_files += 1
                 tqdm.write(f"\rTotal: {total_files}, Processed: {processed_files}", end='')
-
+        
         tqdm.write(f"\nFinished processing {processed_files} out of {total_files} files.")
 
     def encrypt_video(self, input_file, output_file, video_key):
@@ -155,54 +159,57 @@ class Encrypt():
             # 文件不存在或无法打开时捕获异常
             return False
 
-    def encrypt_image(self, input_path, output_dir,image_key):
+    def encrypt_image(self, input_path, output_dir, image_key):
         """加密图片"""
         # 获取原始文件名和扩展名
         base_name = os.path.basename(input_path)
         file_name, ext = os.path.splitext(base_name)
-        # 打开图片并转换为PNG格式
+        
+        # 打开图片并读取为BytesIO对象
         with Image.open(input_path) as img:
-            img.save('temp.png')
-        # 加密临时PNG文件并写入输出目录
-        with open('temp.png', 'rb') as file:
-            data = file.read()
+            img_io = BytesIO()
+            img.save(img_io, format='PNG')  # 直接保存到BytesIO对象中，格式为PNG
+            img_io.seek(0)  # 将读取指针移到开头
+
+        # 从BytesIO对象中读取数据进行加密
+        data = img_io.read()
         cipher_suite = Fernet(image_key)
         encrypted_data = cipher_suite.encrypt(data)
-        output_path = os.path.join(output_dir, f'{file_name}.encrypted.bin')
+        
+        # 直接将加密数据写入输出文件
+        output_path = os.path.join(output_dir, f'{file_name}{ext}.encrypted.bin')
         with open(output_path, 'wb') as out_file:
             out_file.write(encrypted_data)
 
-    def decrypt_image(self, input_path, output_dir,image_key):
+    def decrypt_image(self, input_path, output_dir, image_key):
         """解密图片"""
         # 获取原始文件名（假设输入的是加密文件）
         base_name = os.path.basename(input_path)
-        file_name = os.path.splitext(base_name)[0]
+        pre_decrypted_name = base_name.split(".encrypted.bin")[0]  # 移除前导点
+        original_ext = os.path.splitext(pre_decrypted_name)[1]
+        pre_decrypted_name_save = base_name.split(original_ext)[0]
+        
         # 读取加密文件并解密
         with open(input_path, 'rb') as file:
             encrypted_data = file.read()
         cipher_suite = Fernet(image_key)
         decrypted_data = cipher_suite.decrypt(encrypted_data)
-        # 将解密后的内容写回为PNG图片并存到输出目录
-        temp_output = f'decrypted_temp.png'
-        with open(temp_output, 'wb') as out_file:
-            out_file.write(decrypted_data)
-        # 将PNG图片转换回原始格式并保存
-        img = Image.open(temp_output)
-        original_ext = '.jpg'  # 假设原图是JPG格式，可根据实际情况调整
-        output_path = os.path.join(output_dir, f'{file_name}{original_ext}')
-        # 假设 img 是已经解密并加载到 PIL.Image 对象中的图像
+        
+        # 使用BytesIO处理解密后的数据，避免写入磁盘
+        img_io = BytesIO(decrypted_data)
+        img_io.seek(0)
+        
+        # 直接从BytesIO对象加载图像，并转换为原始格式保存
+        img = Image.open(img_io)
         if img.mode == 'RGBA':
-            # 转换为 RGB 模式并丢弃 Alpha 通道（透明度）
             img = img.convert('RGB')
-        # 现在可以安全地以 JPEG 格式保存了
-        img.save(output_path, format='JPEG')
-        # img.save(output_path)
-        # 删除临时文件
-        os.remove(temp_output)
-
+        
+        # 确保输出路径正确反映原始文件扩展名
+        output_path = os.path.join(output_dir, f'{pre_decrypted_name_save}{original_ext}')
+        img.save(output_path)  # PIL会根据原始扩展名自动选择正确的保存格式
 if __name__ == '__main__':
     # 加密方式
-    model='encrypt'  # decrypt
+    model='decrypt'  # encrypt ｜｜ decrypt
     # 源文件夹
     input_folder = 'original'
     # 加密文件夹
@@ -210,7 +217,7 @@ if __name__ == '__main__':
     # 解密文件夹
     output_folder_decrypt = 'decrypted'
     # 图片加密密钥
-    # image_key = 'Y-GGKXSzwywaYfcZrOcAxq3yLijuD_-_Oy7I77bvX_o='
+    # image_key = 'pUJbd08CNHXG1r8RHwabcH0dT6CIdP6tqFm0jXJGvoY='
     image_key = None
     # 视频加密密钥
     # video_key = b'\x7fVG\r\x94\xd8\xb96\x10p/\x83\x1a\x00o\xf0_\xc2*O\xd7;`\xce\xf2\xf1&m\x8a\xec}\x80'
