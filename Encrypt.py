@@ -216,7 +216,7 @@ if __name__ == '__main__':
     output_folder_encrypt = 'encrypted'
     # 解密文件夹
     output_folder_decrypt = 'decrypted'
-    # 图片加密密钥
+    # 图片加密密钥.
     # image_key = 'pUJbd08CNHXG1r8RHwabcH0dT6CIdP6tqFm0jXJGvoY='
     image_key = None
     # 视频加密密钥
